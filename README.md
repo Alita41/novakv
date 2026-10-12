@@ -132,10 +132,6 @@ These are **local reference measurements, not production claims**. Rerun the ben
 
 See [`docs/benchmarking.md`](docs/benchmarking.md) for methodology and interpretation.
 
-## Resume-safe description
-
-> Built NovaKV, a concurrent C++17 key-value service with TCP networking, a fixed worker pool, sharded `shared_mutex` synchronization, TTL expiry, a bounded LRU read cache, and checksummed write-ahead-log recovery; added unit/integration tests and a reproducible latency/throughput benchmark harness.
-
 ## License
 
 MIT
