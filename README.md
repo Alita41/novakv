@@ -90,7 +90,7 @@ client.close()
 
 Every mutating command appends a checksummed binary record to the WAL before returning. On restart, NovaKV replays valid records and stops cleanly at an incomplete/corrupt tail. `CHECKPOINT` rewrites the current live keyspace to a compact WAL.
 
-This project intentionally does **not** claim fsync-level power-loss durability, distributed consensus, replication, or automatic failover. Those are different engineering problems and are outside this repository's current scope.
+The WAL flushes its output stream, but does not currently issue an explicit `fsync`; sudden power loss may therefore lose recently written records. NovaKV is a single-node service without replication, consensus, or automatic failover.
 
 ## Tests
 
@@ -128,7 +128,7 @@ A reference run in the project build environment (5 reported CPUs, x86_64) used 
 | p95 latency | 1.2444 ms |
 | p99 latency | 1.6484 ms |
 
-These are **local reference measurements, not production claims**. Rerun the benchmark on target hardware before quoting performance externally.
+Measurements reflect the reference machine and workload. Throughput and latency will vary with hardware, workload, and configuration; rerun the benchmark on target hardware for comparison.
 
 See [`docs/benchmarking.md`](docs/benchmarking.md) for methodology and interpretation.
 
