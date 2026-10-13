@@ -14,7 +14,7 @@ enum class WalOp : std::uint8_t { Set = 1, Delete = 2 };
 
 class WAL {
 public:
-    explicit WAL(std::string path, bool fsync_each_write = false);
+    explicit WAL(std::string path);
     ~WAL();
 
     void append_set(const std::string& key, const std::string& value, std::int64_t expires_at_ms);
@@ -29,7 +29,6 @@ private:
     void reopen_append();
 
     std::string path_;
-    bool fsync_each_write_;
     std::ofstream out_;
     std::mutex mutex_;
 };

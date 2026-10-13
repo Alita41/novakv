@@ -39,3 +39,7 @@ The current implementation flushes the C++ output stream after every record. It 
 ## Scope
 
 NovaKV is a single-node concurrent storage service. It does not claim consensus, automatic failover, distributed replication, or linearizable multi-node transactions.
+
+## Mutation ordering
+
+A server-wide mutex serializes write commands and checkpoint creation. This maintains a coherent order between in-memory updates and WAL records; read commands still run concurrently through shared shard locks. The WAL is flushed, not fsynced, so it does not guarantee durability after sudden power loss.

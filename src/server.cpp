@@ -2,8 +2,12 @@
 #include "novakv/wal.hpp"
 
 #include <arpa/inet.h>
+#include <charconv>
 #include <atomic>
 #include <condition_variable>
+#include <cerrno>
+#include <cctype>
+#include <limits>
 #include <csignal>
 #include <cstring>
 #include <deque>
@@ -52,7 +56,8 @@ std::string trim_left(std::string s) {
     return p == std::string::npos ? "" : s.substr(p);
 }
 
-std::string handle(const std::string& line, novakv::Store& store, novakv::WAL& wal, bool& quit) {
+std::string handle(const std::string& line, novakv::Store& store, novakv::WAL& wal,
+                   std::mutex& mutation_mutex, bool& quit) {
     std::istringstream in(line);
     std::string cmd;
     in >> cmd;
@@ -68,19 +73,31 @@ std::string handle(const std::string& line, novakv::Store& store, novakv::WAL& w
         std::string key; if (!(in >> key)) return "-ERR SET requires key and value\n";
         std::string value; std::getline(in, value); value = trim_left(value);
         if (value.empty()) return "-ERR SET requires value\n";
-        store.set(key, value); wal.append_set(key, value, 0); return "+OK\n";
+        std::lock_guard<std::mutex> lock(mutation_mutex);
+        store.set(key, value);
+        wal.append_set(key, value, 0);
+        return "+OK\n";
     }
     if (cmd == "SETEX") {
         std::string key; long long ttl = 0;
         if (!(in >> key >> ttl) || ttl <= 0) return "-ERR SETEX requires key positive_ttl_ms value\n";
         std::string value; std::getline(in, value); value = trim_left(value);
         if (value.empty()) return "-ERR SETEX requires value\n";
-        const auto expires = novakv::Store::now_ms() + ttl;
-        store.set_absolute(key, value, expires); wal.append_set(key, value, expires); return "+OK\n";
+        const auto now = novakv::Store::now_ms();
+        if (ttl > std::numeric_limits<std::int64_t>::max() - now)
+            return "-ERR TTL exceeds supported range\n";
+        const auto expires = now + ttl;
+        std::lock_guard<std::mutex> lock(mutation_mutex);
+        store.set_absolute(key, value, expires);
+        wal.append_set(key, value, expires);
+        return "+OK\n";
     }
     if (cmd == "DEL") {
         std::string key; if (!(in >> key)) return "-ERR DEL requires key\n";
-        const bool removed = store.erase(key); wal.append_delete(key); return ":" + std::to_string(removed ? 1 : 0) + "\n";
+        std::lock_guard<std::mutex> lock(mutation_mutex);
+        const bool removed = store.erase(key);
+        wal.append_delete(key);
+        return ":" + std::to_string(removed ? 1 : 0) + "\n";
     }
     if (cmd == "EXISTS") {
         std::string key; if (!(in >> key)) return "-ERR EXISTS requires key\n";
@@ -91,20 +108,31 @@ std::string handle(const std::string& line, novakv::Store& store, novakv::WAL& w
         return ":" + std::to_string(store.ttl_ms(key)) + "\n";
     }
     if (cmd == "INCR") {
-        std::string key; long long delta = 1;
+        std::string key;
         if (!(in >> key)) return "-ERR INCR requires key [delta]\n";
-        if (!(in >> delta)) delta = 1;
+        std::int64_t delta = 1;
+        std::string delta_text;
+        if (in >> delta_text) {
+            const auto parsed = std::from_chars(
+                delta_text.data(), delta_text.data() + delta_text.size(), delta);
+            if (parsed.ec != std::errc{} || parsed.ptr != delta_text.data() + delta_text.size())
+                return "-ERR invalid increment\n";
+        }
+        std::lock_guard<std::mutex> lock(mutation_mutex);
         auto value = store.incr(key, delta);
         if (!value) return "-ERR value is not an integer or overflow\n";
-        auto stored = store.get(key);
-        wal.append_set(key, stored.value_or("0"), 0);
+        const auto record = store.record(key);
+        if (!record) return "-ERR internal missing increment record\n";
+        wal.append_set(key, record->value, record->expires_at_ms);
         return ":" + std::to_string(*value) + "\n";
     }
     if (cmd == "STATS") {
         auto body = json_stats(store.stats()); return "$" + std::to_string(body.size()) + "\n" + body + "\n";
     }
     if (cmd == "CHECKPOINT") {
-        wal.checkpoint(store); return "+OK\n";
+        std::lock_guard<std::mutex> lock(mutation_mutex);
+        wal.checkpoint(store);
+        return "+OK\n";
     }
     return "-ERR unknown command\n";
 }
@@ -123,7 +151,8 @@ private:
     std::mutex m_; std::condition_variable cv_; std::deque<int> q_;
 };
 
-void serve_client(int fd, novakv::Store& store, novakv::WAL& wal) {
+void serve_client(int fd, novakv::Store& store, novakv::WAL& wal,
+                  std::mutex& mutation_mutex) {
     timeval timeout{}; timeout.tv_sec = 0; timeout.tv_usec = 500000;
     ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout));
     std::string buffer;
@@ -131,6 +160,7 @@ void serve_client(int fd, novakv::Store& store, novakv::WAL& wal) {
     bool quit = false;
     while (!quit && g_running.load()) {
         auto n = ::recv(fd, chunk, sizeof(chunk), 0);
+        if (n < 0 && (errno == EINTR || errno == EAGAIN || errno == EWOULDBLOCK)) continue;
         if (n <= 0) break;
         buffer.append(chunk, static_cast<std::size_t>(n));
         while (true) {
@@ -139,7 +169,7 @@ void serve_client(int fd, novakv::Store& store, novakv::WAL& wal) {
             std::string line = buffer.substr(0, pos);
             if (!line.empty() && line.back() == '\r') line.pop_back();
             buffer.erase(0, pos + 1);
-            if (!send_all(fd, handle(line, store, wal, quit))) { quit = true; break; }
+            if (!send_all(fd, handle(line, store, wal, mutation_mutex, quit))) { quit = true; break; }
         }
     }
     ::close(fd);
@@ -182,10 +212,14 @@ int main(int argc, char** argv) {
 
     std::cerr << "NovaKV listening on 127.0.0.1:" << port << " workers=" << workers << " replayed=" << replayed << "\n";
     ConnectionQueue queue;
+    // A single mutation lock orders WAL records with their corresponding
+    // in-memory writes and prevents checkpoint snapshots from losing updates.
+    // Reads still proceed concurrently across shards.
+    std::mutex mutation_mutex;
     std::vector<std::thread> pool;
     pool.reserve(workers);
     for (std::size_t i = 0; i < workers; ++i) {
-        pool.emplace_back([&]{ int fd; while (queue.pop(fd)) serve_client(fd, store, wal); });
+        pool.emplace_back([&]{ int fd; while (queue.pop(fd)) serve_client(fd, store, wal, mutation_mutex); });
     }
 
     while (g_running.load() && !g_stop) {

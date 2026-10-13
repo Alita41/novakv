@@ -1,8 +1,7 @@
 build/
-__pycache__/
 .pytest_cache/
+__pycache__/
 *.pyc
-.venv/
-data/
 *.wal
-*.tmp
+.server.pid
+.DS_Store

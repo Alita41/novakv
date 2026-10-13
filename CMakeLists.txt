@@ -19,7 +19,6 @@ target_compile_options(novakv-server PRIVATE -Wall -Wextra -Wpedantic)
 
 add_executable(novakv-unit-tests tests/test_core.cpp)
 target_link_libraries(novakv-unit-tests PRIVATE novakv_core pthread)
-# Keep assertions active in test code even with Release/-DNDEBUG builds.
 if (CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
     target_compile_options(novakv-unit-tests PRIVATE -UNDEBUG)
 endif()

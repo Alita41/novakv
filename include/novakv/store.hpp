@@ -38,6 +38,7 @@ public:
     void set(const std::string& key, std::string value, std::int64_t ttl_ms = 0);
     void set_absolute(const std::string& key, std::string value, std::int64_t expires_at_ms);
     std::optional<std::string> get(const std::string& key);
+    std::optional<Entry> record(const std::string& key) const;
     bool erase(const std::string& key);
     bool exists(const std::string& key);
     std::int64_t ttl_ms(const std::string& key);

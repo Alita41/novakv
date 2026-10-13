@@ -36,8 +36,8 @@ bool read_num(std::istream& in, T& value) {
 }
 }
 
-WAL::WAL(std::string path, bool fsync_each_write)
-    : path_(std::move(path)), fsync_each_write_(fsync_each_write) {
+WAL::WAL(std::string path)
+    : path_(std::move(path)) {
     std::filesystem::path p(path_);
     if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path());
     reopen_append();
@@ -72,10 +72,7 @@ void WAL::append_record(WalOp op, const std::string& key, const std::string& val
     out_.write(reinterpret_cast<const char*>(payload.data()), payload.size());
     out_.flush();
     if (!out_) throw std::runtime_error("failed writing WAL");
-    if (fsync_each_write_) {
-        // std::ofstream does not expose its fd portably. Flush still preserves ordering;
-        // durability semantics are documented as best-effort unless fsync is added via platform-specific I/O.
-    }
+
 }
 
 void WAL::append_set(const std::string& key, const std::string& value, std::int64_t expires_at_ms) {

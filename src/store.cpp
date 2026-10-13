@@ -42,48 +42,52 @@ void Store::set_absolute(const std::string& key, std::string value, std::int64_t
     {
         std::unique_lock<std::shared_mutex> lock(shard.mutex);
         shard.data[key] = Entry{value, expires_at_ms};
+        cache_.put(key, std::move(value));
     }
-    cache_.put(key, std::move(value));
     sets_.fetch_add(1, std::memory_order_relaxed);
 }
 
 std::optional<std::string> Store::get(const std::string& key) {
     gets_.fetch_add(1, std::memory_order_relaxed);
-    if (auto cached = cache_.get(key)) {
-        auto& shard = *shards_[shard_index(key)];
-        std::shared_lock<std::shared_mutex> lock(shard.mutex);
-        auto it = shard.data.find(key);
-        if (it != shard.data.end() && !expired(it->second, now_ms())) {
-            cache_hits_.fetch_add(1, std::memory_order_relaxed);
-            hits_.fetch_add(1, std::memory_order_relaxed);
-            return cached;
-        }
-    }
-    cache_misses_.fetch_add(1, std::memory_order_relaxed);
 
+    // A cache lookup is only a hint. Every hit is validated against the
+    // canonical entry while the shard is locked, including its TTL and value.
+    const auto cached = cache_.get(key);
     auto& shard = *shards_[shard_index(key)];
-    const auto now = now_ms();
     {
         std::shared_lock<std::shared_mutex> lock(shard.mutex);
         auto it = shard.data.find(key);
         if (it == shard.data.end()) {
             misses_.fetch_add(1, std::memory_order_relaxed);
+            cache_misses_.fetch_add(1, std::memory_order_relaxed);
             return std::nullopt;
         }
-        if (!expired(it->second, now)) {
-            auto value = it->second.value;
-            lock.unlock();
-            cache_.put(key, value);
+        if (!expired(it->second, now_ms())) {
+            const auto& value = it->second.value;
+            if (cached && *cached == value) {
+                cache_hits_.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                cache_misses_.fetch_add(1, std::memory_order_relaxed);
+                // Keep the shard read lock until the cache is refreshed, so
+                // an older read cannot overwrite a newer writer's cache value.
+                cache_.put(key, value);
+            }
             hits_.fetch_add(1, std::memory_order_relaxed);
             return value;
         }
     }
+
+    // Another thread may have replaced the expired value by now. Never
+    // erase the replacement; expiration cleanup must re-check under a write lock.
     {
         std::unique_lock<std::shared_mutex> lock(shard.mutex);
         auto it = shard.data.find(key);
-        if (it != shard.data.end() && expired(it->second, now)) shard.data.erase(it);
+        if (it != shard.data.end() && expired(it->second, now_ms())) {
+            shard.data.erase(it);
+            cache_.erase(key);
+        }
     }
-    cache_.erase(key);
+    cache_misses_.fetch_add(1, std::memory_order_relaxed);
     misses_.fetch_add(1, std::memory_order_relaxed);
     return std::nullopt;
 }
@@ -94,8 +98,8 @@ bool Store::erase(const std::string& key) {
     {
         std::unique_lock<std::shared_mutex> lock(shard.mutex);
         removed = shard.data.erase(key) > 0;
+        cache_.erase(key);
     }
-    cache_.erase(key);
     deletes_.fetch_add(1, std::memory_order_relaxed);
     return removed;
 }
@@ -106,19 +110,34 @@ bool Store::exists(const std::string& key) {
 
 std::int64_t Store::ttl_ms(const std::string& key) {
     auto& shard = *shards_[shard_index(key)];
-    const auto now = now_ms();
     {
         std::shared_lock<std::shared_mutex> lock(shard.mutex);
         auto it = shard.data.find(key);
         if (it == shard.data.end()) return -2;
-        if (expired(it->second, now)) {
-            lock.unlock();
-            erase(key);
-            return -2;
+        if (!expired(it->second, now_ms())) {
+            if (it->second.expires_at_ms == 0) return -1;
+            return std::max<std::int64_t>(0, it->second.expires_at_ms - now_ms());
         }
-        if (it->second.expires_at_ms == 0) return -1;
-        return std::max<std::int64_t>(0, it->second.expires_at_ms - now);
     }
+
+    std::unique_lock<std::shared_mutex> lock(shard.mutex);
+    auto it = shard.data.find(key);
+    if (it == shard.data.end()) return -2;
+    if (expired(it->second, now_ms())) {
+        shard.data.erase(it);
+        cache_.erase(key);
+        return -2;
+    }
+    if (it->second.expires_at_ms == 0) return -1;
+    return std::max<std::int64_t>(0, it->second.expires_at_ms - now_ms());
+}
+
+std::optional<Entry> Store::record(const std::string& key) const {
+    const auto& shard = *shards_[shard_index(key)];
+    std::shared_lock<std::shared_mutex> lock(shard.mutex);
+    auto it = shard.data.find(key);
+    if (it == shard.data.end() || expired(it->second, now_ms())) return std::nullopt;
+    return it->second;
 }
 
 std::optional<std::int64_t> Store::incr(const std::string& key, std::int64_t delta) {
@@ -147,8 +166,8 @@ std::optional<std::int64_t> Store::incr(const std::string& key, std::int64_t del
             updated = std::to_string(result);
             it->second.value = updated;
         }
+        cache_.put(key, updated);
     }
-    cache_.put(key, updated);
     sets_.fetch_add(1, std::memory_order_relaxed);
     return result;
 }

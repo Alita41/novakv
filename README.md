@@ -88,9 +88,9 @@ client.close()
 
 ## Persistence behavior
 
-Every mutating command appends a checksummed binary record to the WAL before returning. On restart, NovaKV replays valid records and stops cleanly at an incomplete/corrupt tail. `CHECKPOINT` rewrites the current live keyspace to a compact WAL.
+The server serializes mutations with WAL appends and checkpoint creation so concurrent clients cannot reorder updates in the persistence log. Each mutation is flushed to the WAL before the response is sent. On restart, NovaKV replays valid records and stops cleanly at an incomplete/corrupt tail. `CHECKPOINT` rewrites the current live keyspace to a compact WAL.
 
-The WAL flushes its output stream, but does not currently issue an explicit `fsync`; sudden power loss may therefore lose recently written records. NovaKV is a single-node service without replication, consensus, or automatic failover.
+This project intentionally does **not** claim fsync-level power-loss durability, distributed consensus, replication, or automatic failover. Those are different engineering problems and are outside this repository's current scope.
 
 ## Tests
 
@@ -116,21 +116,22 @@ The tests cover:
 make benchmark
 ```
 
-The benchmark drives mixed traffic over persistent TCP connections and reports throughput plus mean/p50/p95/p99 latency. Raw measured output is stored in `artifacts/benchmark.json`.
+The benchmark preloads 10,000 keys before timing, then drives 80% GET and 20% SET traffic over persistent TCP connections. It reports throughput and mean/p50/p95/p99 client-observed latency, excluding the initial preload. Raw measured output is stored in `artifacts/benchmark.json`.
 
-A reference run in the project build environment (5 reported CPUs, x86_64) used 30,000 requests, 16 concurrent clients, 64-byte values, and an 80/20 GET/SET mix:
+A reference run in the project build environment (5 reported CPUs, x86_64) used 30,000 measured requests, 16 concurrent clients, 16 server workers, 64-byte values, a preloaded 10,000-key working set, and an 80/20 GET/SET mix:
 
 | Metric | Measured result |
 |---|---:|
-| Throughput | 12,625.78 ops/s |
-| Mean latency | 0.9241 ms |
-| p50 latency | 0.5778 ms |
-| p95 latency | 1.2444 ms |
-| p99 latency | 1.6484 ms |
+| Throughput | 8,948.28 ops/s |
+| Mean latency | 1.7658 ms |
+| p50 latency | 1.6195 ms |
+| p95 latency | 3.4913 ms |
+| p99 latency | 4.8845 ms |
 
-Measurements reflect the reference machine and workload. Throughput and latency will vary with hardware, workload, and configuration; rerun the benchmark on target hardware for comparison.
+These measurements are specific to the reference machine and workload; rerun the benchmark on target hardware when comparing performance.
 
 See [`docs/benchmarking.md`](docs/benchmarking.md) for methodology and interpretation.
+
 
 ## License
 

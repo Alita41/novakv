@@ -14,7 +14,9 @@ def worker(host, port, start, count, value_size):
     lat=[]; value="x"*value_size
     with socket.create_connection((host,port),timeout=5) as s, s.makefile("rwb",buffering=0) as f:
         for i in range(start,start+count):
-            key=f"bench:{i%10000}"
+            # Mix operations across the entire preloaded keyspace; otherwise
+            # deterministic GET-only key IDs would all be misses.
+            key=f"bench:{(i*7919)%10000}"
             command = f"SET {key} {value}" if i % 5 == 0 else f"GET {key}"
             t=time.perf_counter_ns(); f.write((command+"\n").encode()); f.flush()
             first=f.readline()
@@ -26,6 +28,18 @@ def worker(host, port, start, count, value_size):
 
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument("--host",default="127.0.0.1"); ap.add_argument("--port",type=int,default=7379); ap.add_argument("--clients",type=int,default=16); ap.add_argument("--requests",type=int,default=20000); ap.add_argument("--value-size",type=int,default=64); ap.add_argument("--out"); a=ap.parse_args()
+    # Populate the read working set before measuring. Warm-up writes are
+    # excluded from request count and measured elapsed time.
+    with socket.create_connection((a.host, a.port), timeout=5) as sock:
+        with sock.makefile("rwb", buffering=0) as f:
+            payload = "x" * a.value_size
+            for key_id in range(10000):
+                f.write(f"SET bench:{key_id} {payload}\n".encode())
+                f.flush()
+                reply = f.readline()
+                if reply != b"+OK\n":
+                    raise RuntimeError(f"preload failed for key {key_id}: {reply!r}")
+
     each=a.requests//a.clients; extra=a.requests%a.clients
     jobs=[]; offset=0
     t0=time.perf_counter()

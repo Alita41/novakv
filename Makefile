@@ -12,7 +12,7 @@ run: build
 
 benchmark: build
 	mkdir -p artifacts data
-	./build/novakv-server --port 7379 --workers 8 --wal data/benchmark.wal & echo $$! > .server.pid
+	./build/novakv-server --port 7379 --workers 16 --wal data/benchmark.wal & echo $$! > .server.pid
 	sleep 0.5
 	python benchmarks/benchmark.py --requests 20000 --clients 16 --out artifacts/benchmark.json
 	kill `cat .server.pid` || true

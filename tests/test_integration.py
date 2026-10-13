@@ -32,11 +32,16 @@ def test_tcp_protocol_and_recovery():
             else: raise RuntimeError("server did not start")
             with s, s.makefile("rwb", buffering=0) as f:
                 assert cmd(f,"PING") == "+PONG"
+                # Persistent connections should survive idle receive timeouts.
+                time.sleep(0.75)
+                assert cmd(f,"PING") == "+PONG"
                 assert cmd(f,"SET name nova kv") == "+OK"
                 assert cmd(f,"GET name")[1] == "nova kv"
                 assert cmd(f,"SETEX temp 60 short") == "+OK"
                 ttl = int(cmd(f,"TTL temp")[1:]); assert 0 <= ttl <= 60
                 assert cmd(f,"SET counter 10") == "+OK"
+                assert cmd(f,"SETEX ttl-counter 5000 41") == "+OK"
+                assert cmd(f,"INCR ttl-counter 1") == ":42"
                 assert cmd(f,"INCR counter 5") == ":15"
                 assert cmd(f,"DEL name") == ":1"
                 assert cmd(f,"GET name") == "$-1"
@@ -56,5 +61,7 @@ def test_tcp_protocol_and_recovery():
             with s, s.makefile("rwb", buffering=0) as f:
                 assert cmd(f,"GET persist")[1] == "yes"
                 assert cmd(f,"GET counter")[1] == "15"
+                assert cmd(f,"GET ttl-counter")[1] == "42"
+                assert int(cmd(f,"TTL ttl-counter")[1:]) > 0
         finally:
             p2.terminate(); p2.wait(timeout=3)

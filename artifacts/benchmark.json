@@ -2,13 +2,13 @@
   "requests": 30000,
   "clients": 16,
   "value_size_bytes": 64,
-  "elapsed_s": 2.3761,
-  "throughput_ops_s": 12625.78,
+  "elapsed_s": 3.3526,
+  "throughput_ops_s": 8948.28,
   "latency_ms": {
-    "mean": 0.9241,
-    "p50": 0.5778,
-    "p95": 1.2444,
-    "p99": 1.6484
+    "mean": 1.7658,
+    "p50": 1.6195,
+    "p95": 3.4913,
+    "p99": 4.8845
   },
   "environment": {
     "cpu_count": 5,
