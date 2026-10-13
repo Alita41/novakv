@@ -90,7 +90,7 @@ client.close()
 
 The server serializes mutations with WAL appends and checkpoint creation so concurrent clients cannot reorder updates in the persistence log. Each mutation is flushed to the WAL before the response is sent. On restart, NovaKV replays valid records and stops cleanly at an incomplete/corrupt tail. `CHECKPOINT` rewrites the current live keyspace to a compact WAL.
 
-This project intentionally does **not** claim fsync-level power-loss durability, distributed consensus, replication, or automatic failover. Those are different engineering problems and are outside this repository's current scope.
+The WAL flushes writes to the output stream but does not call `fsync`, so recent writes may be lost after sudden power failure. NovaKV is single-node; it does not implement replication, consensus, or automatic failover.
 
 ## Tests
 

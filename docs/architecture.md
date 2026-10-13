@@ -34,11 +34,11 @@ A bounded, mutex-protected LRU sits in front of the canonical store for hot read
 
 The write-ahead log stores binary, checksummed records for `SET` and `DELETE`. Replay tolerates a partially written tail by stopping at the first incomplete/corrupt record. `CHECKPOINT` compacts current live state into a replacement WAL, removing overwritten/deleted history.
 
-The current implementation flushes the C++ output stream after every record. It does **not** claim crash-proof fsync durability against sudden power loss; that would require a platform-specific `fsync` policy and is deliberately not overstated.
+Each WAL record is flushed through the C++ output stream. Because the implementation does not call `fsync`, it cannot guarantee that recent writes survive sudden power loss.
 
 ## Scope
 
-NovaKV is a single-node concurrent storage service. It does not claim consensus, automatic failover, distributed replication, or linearizable multi-node transactions.
+NovaKV is a single-node concurrent service. Replication, consensus, failover, and multi-node transactions are outside its scope.
 
 ## Mutation ordering
 
